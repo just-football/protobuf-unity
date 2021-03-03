@@ -1,4 +1,7 @@
-﻿using System.IO;
+﻿using System;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,144 +14,118 @@ namespace E7.Protobuf
         internal static readonly string prefGrpcPath = "ProtobufUnity_GrpcPath";
         internal static readonly string prefLogError = "ProtobufUnity_LogError";
         internal static readonly string prefLogStandard = "ProtobufUnity_LogStandard";
+
         internal static bool enabled
         {
-            get
-            {
-                return EditorPrefs.GetBool(prefProtocEnable, true);
-            }
-            set
-            {
-                EditorPrefs.SetBool(prefProtocEnable, value);
-            }
+            get => EditorPrefs.GetBool(prefProtocEnable, true);
+            set => EditorPrefs.SetBool(prefProtocEnable, value);
         }
+
         internal static bool logError
         {
-            get
-            {
-                return EditorPrefs.GetBool(prefLogError, true);
-            }
-            set
-            {
-                EditorPrefs.SetBool(prefLogError, value);
-            }
+            get => EditorPrefs.GetBool(prefLogError, true);
+            set => EditorPrefs.SetBool(prefLogError, value);
         }
 
         internal static bool logStandard
         {
-            get
-            {
-                return EditorPrefs.GetBool(prefLogStandard, false);
-            }
-            set
-            {
-                EditorPrefs.SetBool(prefLogStandard, value);
-            }
+            get => EditorPrefs.GetBool(prefLogStandard, false);
+            set => EditorPrefs.SetBool(prefLogStandard, value);
         }
 
-        internal static string rawExcPath
+        private static string DesiredProcessorArchitecture => Environment.Is64BitOperatingSystem ? "x64" : "x86";
+
+        private static string _packageDirectory;
+        internal static string packageDirectory => _packageDirectory ?? 
+                                                   (_packageDirectory = 
+                                                       (new DirectoryInfo(Path.GetFullPath("Library/PackageCache"))
+                                                           .GetDirectories("com.e7.protobuf-unity*", SearchOption.TopDirectoryOnly)
+                                                           .FirstOrDefault() ?? 
+                                                        throw new DirectoryNotFoundException("Could not find PackageCache for com.e7.protobuf-unity, is the package installed correctly?"))
+                                                       .FullName);
+
+        internal static string protoIncludePath => Path.Combine(packageDirectory, "Editor", ".protoc", "include");
+
+        private static string _toolsFolder;
+        internal static string toolsFolder
         {
             get
             {
-                return EditorPrefs.GetString(prefProtocExecutable, "");
-            }
-            set
-            {
-                EditorPrefs.SetString(prefProtocExecutable, value);
-            }
-        }
+                if (!string.IsNullOrWhiteSpace(_toolsFolder)) return _toolsFolder;
+                string folder;
+                switch (Application.platform)
+                {
+                    case RuntimePlatform.OSXEditor:
+                        folder = "macosx";
+                        break;
+                    case RuntimePlatform.WindowsEditor:
+                        folder = "windows";
+                        break;
+                    case RuntimePlatform.LinuxEditor:
+                        folder = "linux";
+                        break;
+                    default:
+                        throw new NotImplementedException(
+                            $"Platform {Application.platform} is not supported by gRPC Tools");
+                }
 
-        internal static string excPath
-        {
-            get
-            {
-                string ret = EditorPrefs.GetString(prefProtocExecutable, "");
-                if (ret.StartsWith(".."))
-                    return Path.Combine(Application.dataPath, ret);
-                else
-                    return ret;
-            }
-            set
-            {
-                EditorPrefs.SetString(prefProtocExecutable, value);
+                return _toolsFolder = Path.Combine(packageDirectory, "Editor", ".protoc", "bin", $"{folder}_{DesiredProcessorArchitecture}");
             }
         }
 
-        internal static string grpcPath
+        internal static string fileExtension => Application.platform is RuntimePlatform.WindowsEditor ? ".exe" : "";
+
+        internal static string excPath => Path.Combine(toolsFolder, $"protoc{fileExtension}");
+
+        internal static string grpcPath => Path.Combine(toolsFolder, $"grpc_csharp_plugin{fileExtension}");
+
+        public class ProtoPrefsWindow : EditorWindow
         {
-            get
-            {
-                string ret = EditorPrefs.GetString(prefGrpcPath, "");
-                if (ret.StartsWith(".."))
-                    return Path.Combine(Application.dataPath, ret);
-                else
-                    return ret;
-            }
-            set
-            {
-                EditorPrefs.SetString(prefGrpcPath, value);
-            }
-        }
+            internal static ProtoPrefsWindow instance = null;
 
-#if UNITY_2018_3_OR_NEWER
-        internal class ProtobufUnitySettingsProvider : SettingsProvider
-        {
-            public ProtobufUnitySettingsProvider(string path, SettingsScope scope = SettingsScope.User)
-            : base(path, scope)
-            { }
-
-            public override void OnGUI(string searchContext)
+            [MenuItem(@"Tools/Protobuf")]
+            static void Init()
             {
-                ProtobufPreference();
+                instance = GetWindow(typeof(ProtoPrefsWindow)) as ProtoPrefsWindow;
+                instance.titleContent = new GUIContent("Protobuf Settings");
+                instance.Show();
             }
 
-            [SettingsProvider]
-            static SettingsProvider ProtobufPreferenceSettingsProvider()
+            void OnGUI()
             {
-                return new ProtobufUnitySettingsProvider("Preferences/Protobuf");
-            }
-        }
-#else
-        [PreferenceItem("Protobuf")]
-#endif
-        static void ProtobufPreference()
-        {
-            EditorGUI.BeginChangeCheck();
+                if (instance == null)
+                {
+                    Init();
+                }
 
-            enabled = EditorGUILayout.Toggle(new GUIContent("Enable Protobuf Compilation", ""), enabled);
+                EditorGUI.BeginChangeCheck();
 
-            EditorGUI.BeginDisabledGroup(!enabled);
+                GUILayout.Label("Protobuf Settings", EditorStyles.boldLabel);
+                EditorGUILayout.Space();
 
-            EditorGUILayout.HelpBox(@"On Windows put the path to protoc.exe (e.g. C:\My Dir\protoc.exe), on macOS and Linux you can use ""which protoc"" to find its location. (e.g. /usr/local/bin/protoc)", MessageType.Info);
+                enabled = EditorGUILayout.Toggle(new GUIContent("Enable Protobuf", ""), enabled);
 
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Path to protoc", GUILayout.Width(100));
-            rawExcPath = EditorGUILayout.TextField(rawExcPath, GUILayout.ExpandWidth(true));
-            EditorGUILayout.EndHorizontal();
+                EditorGUI.BeginDisabledGroup(!enabled);
 
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Path to grpc", GUILayout.Width(100));
-            grpcPath = EditorGUILayout.TextField(grpcPath, GUILayout.ExpandWidth(true));
-            EditorGUILayout.EndHorizontal();
+                EditorGUILayout.Space();
 
-            EditorGUILayout.Space();
+                logError = EditorGUILayout.Toggle(
+                    new GUIContent("Log Error Output", "Log compilation errors from protoc command."), logError);
 
-            logError = EditorGUILayout.Toggle(new GUIContent("Log Error Output", "Log compilation errors from protoc command."), logError);
+                logStandard =
+                    EditorGUILayout.Toggle(new GUIContent("Log Standard Output", "Log compilation completion messages."),
+                        logStandard);
 
-            logStandard = EditorGUILayout.Toggle(new GUIContent("Log Standard Output", "Log compilation completion messages."), logStandard);
+                EditorGUILayout.Space();
 
-            EditorGUILayout.Space();
+                if (GUILayout.Button(new GUIContent("Force Compilation"))) ProtobufUnityCompiler.CompileAllInProject();
 
-            if (GUILayout.Button(new GUIContent("Force Compilation")))
-            {
-                ProtobufUnityCompiler.CompileAllInProject();
-            }
+                EditorGUI.EndDisabledGroup();
 
-            EditorGUI.EndDisabledGroup();
-
-            if (EditorGUI.EndChangeCheck())
-            {
-            }
+                if (EditorGUI.EndChangeCheck())
+                {
+                }
+            } 
         }
     }
 }
