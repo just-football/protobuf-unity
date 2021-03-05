@@ -12,11 +12,13 @@ namespace E7.Protobuf
 {
     public class ProtobufUnityCompiler : AssetPostprocessor
     {
+		#if UNITY_CLOUD_BUILD
         [DidReloadScripts]
         public static void OnScriptsReloaded()
         {
             CompileAllInProject();
         }
+		#endif
 
         /// <summary>
         ///     Path to the file of all protobuf files in your Unity folder.
