@@ -1,4 +1,4 @@
 [submodule "Editor/.protoc"]
 	path = Editor/.protoc
-	url = https://github.com/just-football/protoc.git
+    url=https://gitlab.com/just-development/protoc.git
 	branch = master
